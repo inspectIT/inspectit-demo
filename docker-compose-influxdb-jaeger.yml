@@ -4,6 +4,7 @@ services:
   #  Ocelot
   ## Serves as a collector for traces
   agent:
+    restart: always
     image: inspectit/inspectit-ocelot-agent:${INSPECTIT_OCELOT_VERSION}
     container_name: agent
     deploy:
@@ -15,6 +16,7 @@ services:
 
   ## Fetches the configuration
   ocelot-config-server:
+    restart: always
     image: inspectit/inspectit-ocelot-configurationserver:${INSPECTIT_OCELOT_VERSION}
     container_name: ocelot-config-server
     deploy:
@@ -29,14 +31,17 @@ services:
     ports:
       - 8090:8090
 
-  ## Self Monitoring
+  ## End User Monitoring
   ocelot-eum-server:
-    image: inspectit/inspectit-ocelot-eum-server:${INSPECTIT_OCELOT_VERSION}
+    restart: always
+    image: inspectit/inspectit-ocelot-eum-server:${INSPECTIT_OCELOT_EUM_VERSION}
     container_name: ocelot-eum-server
     environment:
-      - INSPECTIT_EUM_SERVER_EXPORTERS_METRICS_INFLUX_URL=http://influxdb:8086
+      - INSPECTIT_EUM_SERVER_EXPORTERS_METRICS_INFLUX_ENDPOINT=http://influxdb:8086
       - INSPECTIT_EUM_SERVER_EXPORTERS_METRICS_INFLUX_DATABASE=inspectit_eum
-      - INSPECTIT_EUM_SERVER_EXPORTERS_TRACING_JAEGER_GRPC=jaeger:14250
+      - INSPECTIT_EUM_SERVER_EXPORTERS_TRACING_JAEGER_ENDPOINT=http://jaeger:14268/api/traces
+      - INSPECTIT_EUM_SERVER_EXPORTERS_TRACING_JAEGER_PROTOCOL=http/thrift
+      - INSPECTIT_EUM_SERVER_EXPORTERS_TRACING_SERVICE_NAME=browser
     deploy:
       resources:
         limits:
@@ -48,151 +53,195 @@ services:
 
   #  Petclinic
   config-server:
+    restart: always
     image: inspectit/spring-petclinic-config-server:${INSPECTIT_PETCLINIC_VERSION}
     container_name: config-server
     hostname: config-server
     environment:
       - INSPECTIT_SERVICE_NAME=config-server
       - INSPECTIT_CONFIG_HTTP_URL=http://ocelot-config-server:8090/api/v1/agent/configuration
-      - INSPECTIT_EXPORTERS_METRICS_INFLUX_URL=http://influxdb:8086
-      - INSPECTIT_EXPORTERS_TRACING_JAEGER_URL=http://jaeger:14268/api/traces
+      - INSPECTIT_EXPORTERS_METRICS_INFLUX_ENDPOINT=http://influxdb:8086
+      - INSPECTIT_EXPORTERS_TRACING_JAEGER_ENDPOINT=http://jaeger:14268/api/traces
+      - INSPECTIT_EXPORTERS_TRACING_JAEGER_PROTOCOL=http/thrift
     deploy:
       resources:
         limits:
-          memory: 512M
+          memory: 1024M
+    healthcheck:
+      test: [ "CMD", "curl", "-I", "http://config-server:8888" ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
     depends_on:
-      - agent
-      - ocelot-config-server
-    entrypoint: ["./dockerize", "java", "-javaagent:/agent/inspectit-ocelot-agent.jar", "org.springframework.boot.loader.JarLauncher"]
+      agent:
+        condition: service_started
+      ocelot-config-server:
+        condition: service_started
+    entrypoint: ["java", "-javaagent:/agent/inspectit-ocelot-agent.jar", "org.springframework.boot.loader.launch.JarLauncher"]
     volumes:
       - agent-vol:/agent
     ports:
-     - 8888:8888
+      - 8888:8888
 
   discovery-server:
+    restart: always
     image: inspectit/spring-petclinic-discovery-server:${INSPECTIT_PETCLINIC_VERSION}
     container_name: discovery-server
     hostname: discovery-server
     environment:
       - INSPECTIT_SERVICE_NAME=discovery-server
       - INSPECTIT_CONFIG_HTTP_URL=http://ocelot-config-server:8090/api/v1/agent/configuration
-      - INSPECTIT_EXPORTERS_METRICS_INFLUX_URL=http://influxdb:8086
-      - INSPECTIT_EXPORTERS_TRACING_JAEGER_URL=http://jaeger:14268/api/traces
+      - INSPECTIT_EXPORTERS_METRICS_INFLUX_ENDPOINT=http://influxdb:8086
+      - INSPECTIT_EXPORTERS_TRACING_JAEGER_ENDPOINT=http://jaeger:14268/api/traces
+      - INSPECTIT_EXPORTERS_TRACING_JAEGER_PROTOCOL=http/thrift
     deploy:
       resources:
         limits:
-          memory: 512M
+          memory: 1024M
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://discovery-server:8761" ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     depends_on:
-      - agent
-      - ocelot-config-server
-      - config-server
-    entrypoint: ["./dockerize","-wait=tcp://config-server:8888","-timeout=120s","--", "java", "-javaagent:/agent/inspectit-ocelot-agent.jar", "org.springframework.boot.loader.JarLauncher"]
+      agent:
+        condition: service_started
+      ocelot-config-server:
+        condition: service_started
+      config-server:
+        condition: service_healthy
+    entrypoint: ["java", "-javaagent:/agent/inspectit-ocelot-agent.jar", "org.springframework.boot.loader.launch.JarLauncher"]
     volumes:
       - agent-vol:/agent
     ports:
-     - 8761:8761
+      - 8761:8761
 
   customers-service:
+    restart: always
     image: inspectit/spring-petclinic-customers-service:${INSPECTIT_PETCLINIC_VERSION}
     container_name: customers-service
     hostname: customers-service
     environment:
       - INSPECTIT_SERVICE_NAME=customers-service
       - INSPECTIT_CONFIG_HTTP_URL=http://ocelot-config-server:8090/api/v1/agent/configuration
-      - INSPECTIT_EXPORTERS_METRICS_INFLUX_URL=http://influxdb:8086
-      - INSPECTIT_EXPORTERS_TRACING_JAEGER_URL=http://jaeger:14268/api/traces
+      - INSPECTIT_EXPORTERS_METRICS_INFLUX_ENDPOINT=http://influxdb:8086
+      - INSPECTIT_EXPORTERS_TRACING_JAEGER_ENDPOINT=http://jaeger:14268/api/traces
+      - INSPECTIT_EXPORTERS_TRACING_JAEGER_PROTOCOL=http/thrift
     deploy:
       resources:
         limits:
           memory: 512M
     depends_on:
-      - agent
-      - ocelot-config-server
-      - config-server
-      - discovery-server
-    entrypoint: ["./dockerize","-wait=tcp://discovery-server:8761","-timeout=120s","--","java", "-javaagent:/agent/inspectit-ocelot-agent.jar", "org.springframework.boot.loader.JarLauncher"]
+      agent:
+        condition: service_started
+      ocelot-config-server:
+        condition: service_started
+      config-server:
+        condition: service_healthy
+      discovery-server:
+        condition: service_healthy
+    entrypoint: ["java", "-javaagent:/agent/inspectit-ocelot-agent.jar", "org.springframework.boot.loader.launch.JarLauncher"]
     volumes:
       - agent-vol:/agent
     ports:
       - 8081:8081
 
   visits-service:
+    restart: always
     image: inspectit/spring-petclinic-visits-service:${INSPECTIT_PETCLINIC_VERSION}
     container_name: visits-service
     hostname: visits-service
     environment:
       - INSPECTIT_SERVICE_NAME=visits-service
       - INSPECTIT_CONFIG_HTTP_URL=http://ocelot-config-server:8090/api/v1/agent/configuration
-      - INSPECTIT_EXPORTERS_METRICS_INFLUX_URL=http://influxdb:8086
-      - INSPECTIT_EXPORTERS_TRACING_JAEGER_URL=http://jaeger:14268/api/traces
+      - INSPECTIT_EXPORTERS_METRICS_INFLUX_ENDPOINT=http://influxdb:8086
+      - INSPECTIT_EXPORTERS_TRACING_JAEGER_ENDPOINT=http://jaeger:14268/api/traces
+      - INSPECTIT_EXPORTERS_TRACING_JAEGER_PROTOCOL=http/thrift
     deploy:
       resources:
         limits:
           memory: 512M
     depends_on:
-     - agent
-     - ocelot-config-server
-     - config-server
-     - discovery-server
-    entrypoint: ["./dockerize","-wait=tcp://discovery-server:8761","-timeout=120s","--","java", "-javaagent:/agent/inspectit-ocelot-agent.jar", "org.springframework.boot.loader.JarLauncher"]
+      agent:
+        condition: service_started
+      ocelot-config-server:
+        condition: service_started
+      config-server:
+        condition: service_healthy
+      discovery-server:
+        condition: service_healthy
+    entrypoint: ["java", "-javaagent:/agent/inspectit-ocelot-agent.jar", "org.springframework.boot.loader.launch.JarLauncher"]
     volumes:
       - agent-vol:/agent
     ports:
-     - 8082:8082
+      - 8082:8082
 
   vets-service:
+    restart: always
     image: inspectit/spring-petclinic-vets-service:${INSPECTIT_PETCLINIC_VERSION}
     container_name: vets-service
     hostname: vets-service
     environment:
       - INSPECTIT_SERVICE_NAME=vets-service
       - INSPECTIT_CONFIG_HTTP_URL=http://ocelot-config-server:8090/api/v1/agent/configuration
-      - INSPECTIT_EXPORTERS_METRICS_INFLUX_URL=http://influxdb:8086
-      - INSPECTIT_EXPORTERS_TRACING_JAEGER_URL=http://jaeger:14268/api/traces
+      - INSPECTIT_EXPORTERS_METRICS_INFLUX_ENDPOINT=http://influxdb:8086
+      - INSPECTIT_EXPORTERS_TRACING_JAEGER_ENDPOINT=http://jaeger:14268/api/traces
+      - INSPECTIT_EXPORTERS_TRACING_JAEGER_PROTOCOL=http/thrift
     deploy:
       resources:
         limits:
           memory: 512M
     depends_on:
-     - agent
-     - ocelot-config-server
-     - config-server
-     - discovery-server
-    entrypoint: ["./dockerize","-wait=tcp://discovery-server:8761","-timeout=120s","--","java", "-javaagent:/agent/inspectit-ocelot-agent.jar", "org.springframework.boot.loader.JarLauncher"]
+      agent:
+        condition: service_started
+      ocelot-config-server:
+        condition: service_started
+      config-server:
+        condition: service_healthy
+      discovery-server:
+        condition: service_healthy
+    entrypoint: ["java", "-javaagent:/agent/inspectit-ocelot-agent.jar", "org.springframework.boot.loader.launch.JarLauncher"]
     volumes:
       - agent-vol:/agent
     ports:
-     - 8083:8083
+      - 8083:8083
 
   api-gateway:
+    restart: always
     image: inspectit/spring-petclinic-api-gateway:${INSPECTIT_PETCLINIC_VERSION}
     container_name: api-gateway
     hostname: api-gateway
     environment:
       - INSPECTIT_SERVICE_NAME=api-gateway
       - INSPECTIT_CONFIG_HTTP_URL=http://ocelot-config-server:8090/api/v1/agent/configuration
-      - INSPECTIT_EXPORTERS_METRICS_INFLUX_URL=http://influxdb:8086
-      - INSPECTIT_EXPORTERS_TRACING_JAEGER_URL=http://jaeger:14268/api/traces
+      - INSPECTIT_EXPORTERS_METRICS_INFLUX_ENDPOINT=http://influxdb:8086
+      - INSPECTIT_EXPORTERS_TRACING_JAEGER_ENDPOINT=http://jaeger:14268/api/traces
+      - INSPECTIT_EXPORTERS_TRACING_JAEGER_PROTOCOL=http/thrift
     deploy:
       resources:
         limits:
           memory: 512M
     depends_on:
-      - agent
-      - ocelot-config-server
-      - config-server
-      - discovery-server
-    entrypoint: ["./dockerize","-wait=tcp://discovery-server:8761","-timeout=120s","--","java", "-javaagent:/agent/inspectit-ocelot-agent.jar", "org.springframework.boot.loader.JarLauncher"]
+      agent:
+        condition: service_started
+      ocelot-config-server:
+        condition: service_started
+      config-server:
+        condition: service_healthy
+      discovery-server:
+        condition: service_healthy
+    entrypoint: ["java", "-javaagent:/agent/inspectit-ocelot-agent.jar", "org.springframework.boot.loader.launch.JarLauncher"]
     volumes:
       - agent-vol:/agent
     ports:
-     - 8080:8080
+      - 8080:8080
 
   #  Monitoring Backend
 
   #  Load Generator
   ## Artificial load on Demo
   load:
+    restart: always
     image: inspectit/spring-petclinic-load:1.0
     container_name: load-generator
     hostname: load-generator
@@ -200,6 +249,7 @@ services:
   #  InfluxDB
   ## Time Series Database
   influxdb:
+    restart: always
     image: influxdb:1.8
     container_name: influxdb
     environment:
@@ -218,7 +268,8 @@ services:
   #  Jaeger
   ## Collects and visualizes traces
   jaeger:
-    image: jaegertracing/all-in-one:1.25.0
+    restart: always
+    image: jaegertracing/all-in-one:1.52.0
     container_name: jaeger
     ports:
       - 16686:16686
@@ -226,7 +277,8 @@ services:
   #  Grafana
   ## Dashboarding
   grafana:
-    image: grafana/grafana:9.0.2
+    restart: always
+    image: grafana/grafana:10.3.5
     container_name: grafana
     environment:
       - GF_PANELS_DISABLE_SANITIZE_HTML=TRUE
@@ -242,12 +294,14 @@ services:
   # Grafana Loki & Promtail
   ## Make logs available in Grafana
   loki:
+    restart: always
     image: grafana/loki:2.5.0
     ports:
       - "3100:3100"
     command: -config.file=/etc/loki/local-config.yaml
 
   promtail:
+    restart: always
     image: grafana/promtail:2.5.0
     volumes:
       - /var/log:/var/log
